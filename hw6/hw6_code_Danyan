@@ -1,0 +1,136 @@
+### HW for Math+Econ+Code Day 6
+## Danyan Zha
+## May 26, 2018
+
+rm(list=ls())
+library('gurobi')
+library(doParallel)
+require(graphics)
+library("EnvStats")
+library("Matrix")
+
+
+nodes <- read.csv("~/Dropbox/MEC May 2018/mec_equil/data/NYC_subway/nodes.csv")
+arcs <- read.csv("~/Dropbox/MEC May 2018/mec_equil/data/NYC_subway/arcs.csv")
+arcs <- arcs[,1:3]
+
+originNode <- 452 # 14 St - Union Sq
+destNode <- 471 # 59 St (R/N)
+
+nNodes <- dim(nodes)[1]
+nArcs <- dim(arcs)[1]
+
+arcs$mu <- 10^5/(arcs$dis_line+10^3)
+
+s = rep (0, nNodes)
+s[originNode] = -1
+s[destNode] = 1
+
+D = (-1)*sparseMatrix(i=c(1:nArcs),j=arcs$from_stop_nb)+1*sparseMatrix(i=c(1:nArcs),j=arcs$to_stop_nb)
+A = t((D)) # incidence matrix
+
+#Q1 Compute max flow using Gurobi
+  c = c(rep(0,nNodes),arcs$mu)
+  A1 = matrix(c(s, rep(0,nArcs)),nrow=1)
+  A2 = cbind2(D,-diag(nArcs))
+  A_constraint = rbind2(A1,A2)
+  
+  # Solve the Dual using Gurobi LP
+  ptm = proc.time()
+  result = gurobi(list(A=A_constraint,obj=c,modelsense="min",rhs=c(1,rep(0,nArcs)),sense=c("=",rep("<=",nArcs)), params=list(OutputFlag=0)))
+  time = proc.time()-ptm
+  if (result$status == "OPTIMAL"){
+    print(paste0("Gurobi achieved optimation in ",time[1], "s"))
+    print(paste0("With Gurobi, maximum flow = ", result$pi[1]))
+  } else{
+    print("Gurobi didn't achieve optimization")
+  }
+  
+#Q2 Compute max flow using Ford-Fulkerson
+  
+#Q3 Social welfare for traffic congestion problem
+  mu <- function(p,D){
+    diff = as.matrix(D) %*% p-1
+    mu = (3/5 * diff * (diff>0) )^(3/2)
+    return(mu)
+  }
+  
+  fn <- function(p_exclude_origin,originNode,s,D){
+    p = append(p_exclude_origin,0,after=originNode-1)
+    mu = mu(p,D)
+    return(sum(p*s)-2/3*sum(mu^(5/3)))
+  }
+
+  gn <- function(p_exclude_origin, originNode,s,D){
+    p = append(p_exclude_origin,0,after=originNode-1)
+    mu = mu(p,D)
+    gradient = s-t(D) %*% mu
+    return(gradient[-originNode])
+  }
+  
+  tol = 1e-6
+  maxiter = 1000
+  cont = TRUE
+  iter = 0
+  p0 = matrix(rep(0,nNodes-1),ncol=1)
+  
+  ptm=proc.time()
+  res_social = optim(p0,fn,gn, originNode = originNode, s=s, D=D, method="BFGS",control=list(maxit=maxiter,fnscale=-1))
+  time = proc.time()-ptm
+  p_opt_social = append(res_social$par,0,after=originNode-1)
+  mu_opt_social = mu(p_opt_social,D)
+  if (is.null(res_social$message)) {
+    print(paste0("Gradient method in optimization fomulation converged in ", time[1], "s."))
+    print(paste0("The minimum cost of social planner problem is = ", res_social$val))
+  } else {
+    print(res_social$message)
+  }
+  
+#Q4 Wardrop equilibrium
+  mu_NE <- function(p,D){
+    diff = as.matrix(D) %*% p-1
+    mu = (diff * (diff>0) )^(3/2)
+    return(mu)
+  }  
+  
+  fn_NE <- function(p_exclude_origin,originNode,s,D){
+    p = append(p_exclude_origin,0,after=originNode-1)
+    mu = mu_NE(p,D)
+    return(sum(p*s)-2/5*sum(mu^(5/3)))
+  }
+  
+  gn_NE <- function(p_exclude_origin, originNode,s,D){
+    p = append(p_exclude_origin,0,after=originNode-1)
+    mu = mu_NE(p,D)
+    gradient = s-t(D) %*% mu
+    return(gradient[-originNode])
+  }
+  
+
+  cont = TRUE
+  iter = 0
+  p0 = matrix(rep(0,nNodes-1),ncol=1)
+  
+  ptm=proc.time()
+  res_NE = optim(p0,fn_NE,gn_NE, originNode = originNode, s=s, D=D, method="BFGS",control=list(maxit=maxiter,fnscale=-1))
+  time = proc.time()-ptm
+  p_opt_NE = append(res_NE$par,0,after=originNode-1)
+  mu_opt_NE = mu_NE(p_opt_NE,D)
+  socialwelfare_NE = sum(mu_opt_NE * (1+mu_opt_NE^(2/3)))
+  
+  if (is.null(res_NE$message)) {
+    print(paste0("Gradient method in optimization fomulation converged in ", time[1], "s."))
+    print(paste0("The social cost of Wardrop equilibrium (NE) is = ", socialwelfare_NE))
+  } else {
+    print(res_NE$message)
+  }
+  
+# Compare Q3 social planner's problem and Q4 Wardrop equilibrium
+  print(paste0("In social optimal solution,"))
+  print(paste0("Number of arcs with positive flow is ", dim(as.matrix(mu_opt_social[which(mu_opt_social>0)],ncol=1))[1]))
+  print(paste0("The average flow of an arc is ", mean(mu_opt_social[which(mu_opt_social>0)])))
+  print(paste0("In Wardrop equilibrium,"))
+  print(paste0("Number of arcs with positive flow is ", dim(as.matrix(mu_opt_NE[which(mu_opt_NE>0)],ncol=1))[1]))
+  print(paste0("The average flow of an arc is ", mean(mu_opt_NE[which(mu_opt_NE>0)])))
+  
+
